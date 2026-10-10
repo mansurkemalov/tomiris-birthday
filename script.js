@@ -53,102 +53,231 @@ const musicButtons = document.querySelectorAll(".music-card");
 
 let currentAudio = null;
 let currentButton = null;
+let playRequestId = 0;
 
-musicButtons.forEach((button) => {
 
-    button.addEventListener("click", () => {
+// Сброс состояния кнопки
+function resetMusicButton(button) {
+    if (!button) return;
 
-        const song = button.dataset.song;
-        const icon = button.querySelector(".play-icon");
+    const icon = button.querySelector(".play-icon");
 
-        // Если нажали на ту же песню
-        if (currentAudio && currentButton === button) {
+    if (icon) {
+        icon.textContent = "▶";
+    }
 
-            if (currentAudio.paused) {
+    button.classList.remove("playing");
+}
 
-                currentAudio.play()
-                    .then(() => {
-                        icon.textContent = "❚❚";
-                    })
-                    .catch((error) => {
-                        console.error("Ошибка воспроизведения:", error);
+
+// Остановка текущей песни
+function stopCurrentAudio() {
+    // Отменяем результаты предыдущих запросов воспроизведения
+    playRequestId++;
+
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.removeAttribute("src");
+        currentAudio.load();
+    }
+
+    resetMusicButton(currentButton);
+
+    currentAudio = null;
+    currentButton = null;
+}
+
+
+// Воспроизведение с одной повторной попыткой
+async function playMusic(audio, button, requestId) {
+    const icon = button.querySelector(".play-icon");
+
+    if (!icon) return;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        // Если пользователь уже переключил песню — прекращаем
+        if (
+            requestId !== playRequestId ||
+            audio !== currentAudio
+        ) {
+            return;
+        }
+
+        try {
+            // Ждём, пока браузер загрузит данные для воспроизведения
+            if (audio.readyState < 2) {
+                await new Promise((resolve, reject) => {
+                    const cleanup = () => {
+                        audio.removeEventListener("canplay", onReady);
+                        audio.removeEventListener("error", onError);
+                    };
+
+                    const onReady = () => {
+                        cleanup();
+                        resolve();
+                    };
+
+                    const onError = () => {
+                        cleanup();
+                        reject(
+                            audio.error ||
+                            new Error("Не удалось загрузить аудио")
+                        );
+                    };
+
+                    audio.addEventListener("canplay", onReady, {
+                        once: true
                     });
 
+                    audio.addEventListener("error", onError, {
+                        once: true
+                    });
+
+                    audio.load();
+
+                    // Если данные уже доступны, продолжаем
+                    if (audio.readyState >= 2) {
+                        cleanup();
+                        resolve();
+                    }
+                });
+            }
+
+            if (
+                requestId !== playRequestId ||
+                audio !== currentAudio
+            ) {
+                return;
+            }
+
+            await audio.play();
+
+            if (
+                requestId !== playRequestId ||
+                audio !== currentAudio
+            ) {
+                audio.pause();
+                return;
+            }
+
+            icon.textContent = "❚❚";
+            button.classList.add("playing");
+
+            return;
+
+        } catch (error) {
+            console.error(
+                `Ошибка воспроизведения (попытка ${attempt + 1}):`,
+                error
+            );
+
+            if (
+                requestId !== playRequestId ||
+                audio !== currentAudio
+            ) {
+                return;
+            }
+
+            // Повторяем попытку только один раз
+            if (attempt === 0) {
+                await new Promise(resolve => setTimeout(resolve, 400));
+                continue;
+            }
+
+            resetMusicButton(button);
+
+            // Не показываем системное окно при каждом сбое.
+            // Сохраняем подробности ошибки в консоли.
+            return;
+        }
+    }
+}
+
+
+// Обработчики музыкальных кнопок
+musicButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+        const song = button.dataset.song;
+
+        if (!song) {
+            console.error("У музыкальной кнопки отсутствует data-song.");
+            return;
+        }
+
+        // Повторное нажатие на текущую песню — пауза или продолжение
+        if (currentAudio && currentButton === button) {
+            if (currentAudio.paused) {
+                const requestId = ++playRequestId;
+
+                await playMusic(
+                    currentAudio,
+                    button,
+                    requestId
+                );
             } else {
-
                 currentAudio.pause();
-                icon.textContent = "▶";
-
+                resetMusicButton(button);
             }
 
             return;
         }
 
+        // Останавливаем предыдущую песню
+        stopCurrentAudio();
 
-        // Остановить предыдущую песню
-        if (currentAudio) {
+        const requestId = ++playRequestId;
 
-            currentAudio.pause();
-            currentAudio.currentTime = 0;
+        try {
+            // Корректно формируем URL относительно адреса сайта
+            const songURL = new URL(song, document.baseURI);
 
-        }
+            const audio = new Audio();
 
-        if (currentButton) {
+            audio.preload = "auto";
+            audio.volume = 0.75;
+            audio.src = songURL.href;
 
-            const oldIcon =
-                currentButton.querySelector(".play-icon");
+            currentAudio = audio;
+            currentButton = button;
 
-            if (oldIcon) {
-                oldIcon.textContent = "▶";
-            }
+            // Если воспроизведение завершилось
+            audio.addEventListener("ended", () => {
+                if (currentAudio !== audio) return;
 
-            currentButton.classList.remove("playing");
+                resetMusicButton(button);
 
-        }
+                currentAudio = null;
+                currentButton = null;
 
-
-        // Создать новый audio
-        currentAudio = new Audio(song);
-        currentButton = button;
-
-        currentAudio.volume = 0.75;
-
-        currentAudio.play()
-            .then(() => {
-
-                icon.textContent = "❚❚";
-                button.classList.add("playing");
-
-            })
-            .catch((error) => {
-
-                console.error("Не удалось воспроизвести:", error);
-
-                icon.textContent = "▶";
-
-                alert(
-                    "Не удалось запустить песню.\n\n" +
-                    "Проверь, что MP3 находится в папке music."
-                );
-
+                playRequestId++;
             });
 
+            // Дополнительная диагностика ошибок загрузки
+            audio.addEventListener("error", () => {
+                if (currentAudio !== audio) return;
 
-        // Когда песня закончилась
-        currentAudio.addEventListener("ended", () => {
+                console.error("Ошибка загрузки песни:", {
+                    file: songURL.href,
+                    code: audio.error?.code,
+                    message: audio.error?.message
+                });
+            });
 
-            icon.textContent = "▶";
-            button.classList.remove("playing");
+            await playMusic(
+                audio,
+                button,
+                requestId
+            );
 
-            currentAudio = null;
-            currentButton = null;
+        } catch (error) {
+            console.error("Ошибка музыкального плеера:", error);
 
-        });
-
+            if (requestId === playRequestId) {
+                resetMusicButton(button);
+            }
+        }
     });
-
 });
-
 
 // ========================================
 // PHOTO MODAL
